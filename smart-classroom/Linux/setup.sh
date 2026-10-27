@@ -51,7 +51,30 @@ if [[ ! -f "$ENV_FILE" ]]; then
     log "⚠️  Missing ${ENV_EXAMPLE} — skipping .env bootstrap; create .env manually."
   fi
 else
-  log ".env already exists — leaving it untouched."
+  log ".env already exists — preserving settings and ensuring ASR downloader plugins are enabled."
+fi
+
+# Existing installations may have an older ENABLED_PLUGINS value. Keep their
+# choices while enabling the new ASR download sources on the same container.
+if [[ -f "$ENV_FILE" ]] && command -v python3 >/dev/null 2>&1; then
+  python3 - "$ENV_FILE" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+lines = path.read_text(encoding="utf-8").splitlines()
+for index, line in enumerate(lines):
+    if not line.startswith("ENABLED_PLUGINS="):
+        continue
+    plugins = [name.strip() for name in line.partition("=")[2].split(",") if name.strip()]
+    if "all" not in plugins:
+        plugins.extend(name for name in ("huggingface", "modelscope") if name not in plugins)
+        lines[index] = "ENABLED_PLUGINS=" + ",".join(plugins)
+    break
+else:
+    lines.append("ENABLED_PLUGINS=huggingface,modelscope,openai-whisper")
+path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+PY
 fi
 
 
@@ -139,8 +162,9 @@ log "Building and starting the stack (docker compose up -d --build)…"
   || die "docker compose up failed — check the build/service logs above."
 
 # --- Wait for the app to become healthy -------------------------------------
-# First run can be slow: model-downloader pulls + exports VLM/embedding/rerank
-# models before `ovms` (and in turn `app`'s SERVING_BASE_URL) is usable, and
+# First run can be slow: the one model-downloader supplies ASR/diarization and
+# (with text-gen enabled) pulls + exports VLM/embedding/rerank models before
+# `ovms` (and in turn `app`'s SERVING_BASE_URL) is usable, and
 # its own healthcheck start_period is 1800s (30 min). Give the overall wait
 # here enough headroom to cover that, polling `app`'s container health status
 # (cheaper/more reliable than curling the endpoint ourselves pre-healthy).

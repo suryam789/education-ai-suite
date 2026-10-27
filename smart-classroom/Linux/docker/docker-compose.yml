@@ -2,7 +2,7 @@
 
 services:
   model-cache-permissions:
-    profiles: ["text-gen"]
+    profiles: ["asr", "text-gen"]
     image: python:3.12-slim
     container_name: sc-model-cache-permissions
     command: >-
@@ -156,7 +156,7 @@ services:
     volumes:
       # Editable service config (ASR provider/model/device, diarization).
       - ../edge-ai-libraries/microservices/audio-analyzer/config.yaml:/app/audio_analyzer/config.yaml:ro
-      - audio-analyzer-models:/app/audio_analyzer/models
+      - model-cache:/app/audio_analyzer/models
       - audio-analyzer-chunks:/app/audio_analyzer/chunks
       - audio-analyzer-storage:/app/audio_analyzer/storage
       - audio-analyzer-cache:/app/audio_analyzer/.cache
@@ -166,7 +166,7 @@ services:
       # slow/proxied network, can take far longer than a Whisper GPU warmup —
       # so start_period must cover that one-time download or the container is
       # wrongly flagged unhealthy before it ever serves. Models persist to the
-      # audio-analyzer-models volume, so subsequent starts are fast.
+      # shared model-cache volume, so subsequent starts are fast.
       test:
         - CMD
         - python3
@@ -176,10 +176,46 @@ services:
       timeout: 10s
       start_period: 1800s
       retries: 5
+    depends_on:
+      audio-analyzer-provisioner: { condition: service_completed_successfully }
     restart: unless-stopped
     networks: [smart-classroom]
 
+  # One-shot ASR model provisioner: runs the Audio Analyzer's provision_models
+  # inside the STOCK model-download image to stage Whisper/FunASR snapshots onto
+  # the shared model-cache before Audio Analyzer starts. Same image, no app code
+  # baked in (mirrors edge-ai-libraries/microservices/audio-analyzer/docker-compose.yml).
+  audio-analyzer-provisioner:
+    profiles: ["asr"]
+    image: intel/model-download:2026.2.0-rc1-ww44r1
+    container_name: sc-audio-analyzer-provisioner
+    command: ["--plugins", "huggingface,modelscope", "--ephemeral", "--command", "python", "-m", "utils.provision_models"]
+    environment:
+      - ENABLED_PLUGINS=huggingface,modelscope
+      - MODEL_PATH=/opt/models
+      - MODELS_DIR=/opt/models
+      - PYTHONPATH=/opt/audio_analyzer:/opt
+      - AUDIO_ANALYZER_CONFIG_PATH=/opt/audio_analyzer/config.yaml
+      - HF_TOKEN=${HF_TOKEN:-}
+      - HTTP_PROXY=${HTTP_PROXY:-}
+      - HTTPS_PROXY=${HTTPS_PROXY:-}
+      - NO_PROXY=${NO_PROXY:-}
+      - TRANSFORMERS_VERBOSITY=error
+      - PYTHONWARNINGS=ignore
+      - HF_HUB_DISABLE_PROGRESS_BARS=1
+      - TQDM_DISABLE=1
+    volumes:
+      - model-cache:/opt/models
+      - ../edge-ai-libraries/microservices/audio-analyzer/utils:/opt/audio_analyzer/utils:ro
+      - ../edge-ai-libraries/microservices/audio-analyzer/config.yaml:/opt/audio_analyzer/config.yaml:ro
+    depends_on:
+      model-cache-permissions: { condition: service_completed_successfully }
+    restart: "no"
+    networks: [smart-classroom]
+
   model-downloader:  
+    # text-gen only: provisions/exports the VLM + embedding + reranker for OVMS.
+    # Not in the asr profile, so an ASR-only run never schedules these downloads.
     profiles: ["text-gen"]
     build:
       context: ../edge-ai-libraries/microservices/model-download
@@ -188,13 +224,13 @@ services:
         HTTP_PROXY: "${HTTP_PROXY:-}"
         HTTPS_PROXY: "${HTTPS_PROXY:-}"
         NO_PROXY: "${NO_PROXY:-}"
-    image: sc-model-downloader:local
+    image: intel/model-download:2026.2.0-rc1-ww44r1
     container_name: sc-model-downloader
-    command: --plugins ${ENABLED_PLUGINS:-huggingface,openvino}
+    command: --plugins ${ENABLED_PLUGINS:-huggingface,openvino,modelscope}
     environment:
       - HF_TOKEN=${HF_TOKEN:-}
       - MODEL_PATH=/opt/models
-      - ENABLED_PLUGINS=${ENABLED_PLUGINS:-huggingface,openvino}
+      - ENABLED_PLUGINS=${ENABLED_PLUGINS:-huggingface,openvino,modelscope}
       - STARTUP_MODELS_CONFIG=/opt/startup-models.yaml
       - OVMS_RELEASE_TAG=${OVMS_RELEASE_TAG:-v2026.3}
       - HTTP_PROXY=${HTTP_PROXY:-}
@@ -378,7 +414,6 @@ volumes:
   model-cache:
   metrics:
   video-analytics-models:
-  audio-analyzer-models:
   audio-analyzer-chunks:
   audio-analyzer-storage:
   audio-analyzer-cache:
