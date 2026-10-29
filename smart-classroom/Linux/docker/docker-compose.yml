@@ -22,7 +22,7 @@ services:
     container_name: sc-storage-permissions
     command: >-
       sh -lc "
-        mkdir -p /app/storage/smart-classroom &&
+        mkdir -p /app/storage/smart-classroom /app/storage/content-search &&
         chown -R 10001:10001 /app/storage &&
         find /app/storage -type d -exec chmod 0775 {} + &&
         find /app/storage -type f -exec chmod 0664 {} +
@@ -68,12 +68,14 @@ services:
       - AUDIO_ANALYZER_URL=http://audio-analyzer:8010
       - SERVING_BASE_URL=${SERVING_BASE_URL:-http://ovms:9000}
       - VIDEO_ANALYTICS_URL=${VIDEO_ANALYTICS_URL:-http://video-analytics:8020}
+      - HF_HOME=/app/models/huggingface
+      - HF_TOKEN=${HF_TOKEN:-}
       - HTTP_PROXY=${HTTP_PROXY:-}
       - HTTPS_PROXY=${HTTPS_PROXY:-}
-      - NO_PROXY=${NO_PROXY:-}
+      - NO_PROXY=localhost,127.0.0.1,::1,${NO_PROXY:-}
       - http_proxy=${HTTP_PROXY:-}
       - https_proxy=${HTTPS_PROXY:-}
-      - no_proxy=${NO_PROXY:-}
+      - no_proxy=localhost,127.0.0.1,::1,${NO_PROXY:-}
     volumes:
       - ${STORAGE_DIR:-../storage}:/app/storage
       - model-cache:/app/models
@@ -83,11 +85,9 @@ services:
     # a profile that isn't active (see repo memory: containerization
     # skeleton). SERVING_BASE_URL is treated as optional at runtime instead;
     # the app only calls it when text-gen is enabled in config.yaml.
-    # content-search is still out of scope for this pass:
-    # depends_on:
-    #   content-search: { condition: service_healthy }
-    # environment:
-    #   - CONTENT_SEARCH_HOST=content-search
+    # Content Search runs inside app when enabled by the feature resolver.
+    # Its localhost-only APIs are exposed through app's same-origin proxy;
+    # SQLite, ChromaDB and uploaded files persist under /app/storage/content-search.
 
   metrics-collector:   # telemetry sidecar: CPU/GPU/NPU/memory/power -> /metrics, /platform-info
     build:

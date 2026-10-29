@@ -11,6 +11,10 @@
 #   ./setup.sh
 set -euo pipefail
 
+export HTTP_PROXY="${HTTP_PROXY:-${http_proxy:-}}"
+export HTTPS_PROXY="${HTTPS_PROXY:-${https_proxy:-}}"
+export NO_PROXY="${NO_PROXY:-${no_proxy:-}}"
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 log() { printf '\033[1;32m[setup]\033[0m %s\n' "$*"; }
@@ -169,6 +173,38 @@ else
   log "    Inspect logs with:"
   log "      docker compose -f docker/docker-compose.yml logs -f app"
   log "      docker compose -f docker/docker-compose.yml logs -f model-downloader ovms"
+  die "App startup failed; resolve the errors above before using the UI."
+fi
+
+CONTENT_SEARCH_ENABLED="$(python3 - "$CONFIG_YAML" <<'PY'
+import sys, yaml
+with open(sys.argv[1], encoding="utf-8-sig") as f:
+    features = (yaml.safe_load(f) or {}).get("features")
+print(features is None or any(
+    features.get(name, {}).get("enabled", False)
+    for name in ("topic_segmentation", "content_search", "qa")
+))
+PY
+)"
+if [[ "$CONTENT_SEARCH_ENABLED" == "True" ]]; then
+  log "Waiting for Content Search (embeddings, reranker and database; first run downloads models)…"
+  content_search_ready="false"
+  while (( elapsed < HEALTH_TIMEOUT_S )); do
+    if docker exec smart-classroom-app python -c \
+      "import urllib.request; opener=urllib.request.build_opener(urllib.request.ProxyHandler({})); opener.open('http://127.0.0.1:8000/api/v1/system/health', timeout=15)" \
+      >/dev/null 2>&1; then
+      content_search_ready="true"
+      break
+    fi
+    sleep "$HEALTH_POLL_INTERVAL_S"
+    elapsed=$(( elapsed + HEALTH_POLL_INTERVAL_S ))
+  done
+  if [[ "$content_search_ready" != "true" ]]; then
+    log "Inspect Content Search readiness: http://localhost:8000/api/v1/system/health"
+    log "Inspect service errors: docker logs --tail 200 smart-classroom-app"
+    die "Content Search did not become ready within ${HEALTH_TIMEOUT_S}s."
+  fi
+  log "✅ Content Search is ready: http://localhost:8000/api/v1/system/health"
 fi
 
 # --- Start the local UI (Vite dev server) -----------------------------------

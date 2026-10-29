@@ -1,4 +1,4 @@
-# Copyright (C) 2026 Intel Corporation
+# SPDX-FileCopyrightText: (C) 2026 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
 #
 
@@ -50,6 +50,7 @@ COPY --from=ui-builder /ui/dist ./ui/dist
 
 COPY utils/ ./utils/
 COPY components/ ./components/
+COPY content_search/ ./content_search/
 COPY api/ ./api/
 COPY model_manager/ ./model_manager/
 COPY services/ ./services/
@@ -58,7 +59,9 @@ COPY constants/ ./constants/
 COPY prompts/ ./prompts/
 COPY config.yaml runtime_config.yaml ./
 
-RUN chown -R app:app /app
+RUN mkdir -p /app/storage/content-search \
+    && ln -s /app/storage/content-search /app/content_search/data \
+    && chown -R app:app /app
 USER app
 
 EXPOSE 8000
