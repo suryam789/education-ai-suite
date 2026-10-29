@@ -39,9 +39,9 @@ services:
       args:
         VITE_API_BASE_URL: "${VITE_API_BASE_URL:-}"
         # Forward the host proxy (if any) so npm/pip can fetch packages.
-        HTTP_PROXY: "${HTTP_PROXY:-}"
-        HTTPS_PROXY: "${HTTPS_PROXY:-}"
-        NO_PROXY: "${NO_PROXY:-}"
+        HTTP_PROXY: "${HTTP_PROXY:-${http_proxy:-}}"
+        HTTPS_PROXY: "${HTTPS_PROXY:-${https_proxy:-}}"
+        NO_PROXY: "${NO_PROXY:-${no_proxy:-}}"
     image: smart-classroom-app:local
     container_name: smart-classroom-app
     ports:
@@ -60,6 +60,9 @@ services:
     networks: [smart-classroom]
     group_add:
       - "1000"
+      - "${RENDER_GID:?Set RENDER_GID to the host render-group ID; run ./setup.sh}"
+    devices:
+      - "/dev/dri:/dev/dri"
     depends_on:
       storage-permissions: { condition: service_completed_successfully }
       metrics-collector: { condition: service_healthy }
@@ -70,12 +73,12 @@ services:
       - VIDEO_ANALYTICS_URL=${VIDEO_ANALYTICS_URL:-http://video-analytics:8020}
       - HF_HOME=/app/models/huggingface
       - HF_TOKEN=${HF_TOKEN:-}
-      - HTTP_PROXY=${HTTP_PROXY:-}
-      - HTTPS_PROXY=${HTTPS_PROXY:-}
-      - NO_PROXY=localhost,127.0.0.1,::1,${NO_PROXY:-}
-      - http_proxy=${HTTP_PROXY:-}
-      - https_proxy=${HTTPS_PROXY:-}
-      - no_proxy=localhost,127.0.0.1,::1,${NO_PROXY:-}
+      - HTTP_PROXY=${HTTP_PROXY:-${http_proxy:-}}
+      - HTTPS_PROXY=${HTTPS_PROXY:-${https_proxy:-}}
+      - NO_PROXY=localhost,127.0.0.1,::1,${NO_PROXY:-${no_proxy:-}}
+      - http_proxy=${HTTP_PROXY:-${http_proxy:-}}
+      - https_proxy=${HTTPS_PROXY:-${https_proxy:-}}
+      - no_proxy=localhost,127.0.0.1,::1,${NO_PROXY:-${no_proxy:-}}
     volumes:
       - ${STORAGE_DIR:-../storage}:/app/storage
       - model-cache:/app/models

@@ -12,7 +12,7 @@ Make sure the following are installed. See [System Requirements](./system-requir
 - Docker Engine and the Docker Compose plugin (your user must be able to run `docker` without `sudo`)
 - Git
 - Python 3 (`python3`) with `pyyaml` available (used by `setup.sh` helper scripts)
-- Intel GPU drivers (optional, for GPU acceleration). When `/dev/dri` is present, `setup.sh` automatically enables the GPU compose overlay and sets `RENDER_GID` in `.env`.
+- An Intel GPU and its Linux driver, available at `/dev/dri`. The Content Search reranker requires GPU access; `setup.sh` stops with an error if the GPU device or host `render` group is missing.
 
 > [!NOTE]
 > Node.js for the UI build is provisioned by `setup.sh` through `scripts/node-setup.sh`.
@@ -52,9 +52,10 @@ port 8000, not through a host port 9011. Both the packaged UI and Vite developme
 UI use this proxy.
 
 The first search-enabled start downloads/exports CLIP, the document embedding
-model and the reranker. Content Search embeddings and reranking default to CPU;
-the main text-generation model can still run on GPU through OVMS. GPU reranking
-requires an app image with the Intel OpenCL runtime and GPU device access.
+model and the reranker. The Content Search reranker always runs on GPU;
+document embeddings may run on CPU, and the main text-generation model can run
+on GPU through OVMS. The app image includes the Intel OpenCL/Level Zero runtime,
+and Docker passes through `/dev/dri` with the host `render` group permission.
 The Hugging Face cache and converted models persist in
 the model-cache volume. ChromaDB, SQLite metadata and uploaded files persist in
 `storage/content-search/` (or under `STORAGE_DIR` when overridden). Do not remove
@@ -109,7 +110,7 @@ The script performs the following:
 4. Warns if diarization is enabled without `HF_TOKEN`.
 5. Syncs `startup-models.yaml` and `startup-models.gpu.yaml` with `config.yaml`.
 6. Derives `COMPOSE_PROFILES` from the enabled features.
-7. Detects an Intel GPU (`/dev/dri`) and enables `docker/docker-compose.gpu.yml` with `RENDER_GID`.
+7. Requires an Intel GPU (`/dev/dri`), sets `RENDER_GID` from the host's `render` group, and enables the GPU Compose configuration.
 8. Validates the compose config, then builds and starts the stack (`docker compose up -d --build`).
 9. Waits for the `smart-classroom-app` container to become healthy and, when search
    features are enabled, for Content Search aggregate readiness. Setup exits with
@@ -118,6 +119,12 @@ The script performs the following:
 
 > [!NOTE]
 > First-time execution can take a long time (up to about 30 minutes) while models are downloaded and exported. Override the wait time with `HEALTH_TIMEOUT_S`, for example `HEALTH_TIMEOUT_S=3600 ./setup.sh`.
+
+> [!NOTE]
+> For manual Docker startup instead of `./setup.sh`, including how to set
+> `RENDER_GID` and run the Compose commands, see
+> [Linux: Manual Docker Startup](../advanced-setup-guide.md#linux-manual-docker-startup)
+> in the Advanced Setup Guide.
 
 On success you should see:
 

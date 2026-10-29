@@ -31,8 +31,45 @@ ARG NO_PROXY=""
 
 COPY docker/system_requirements.txt ./system_requirements.txt
 RUN HTTP_PROXY="$HTTP_PROXY" HTTPS_PROXY="$HTTPS_PROXY" NO_PROXY="$NO_PROXY" \
+    http_proxy="$HTTP_PROXY" https_proxy="$HTTPS_PROXY" no_proxy="$NO_PROXY" \
     apt-get update && apt-get install -y --no-install-recommends \
         $(grep -v '^#' system_requirements.txt | xargs) \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN export http_proxy="$HTTP_PROXY" https_proxy="$HTTPS_PROXY" no_proxy="$NO_PROXY" \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates curl libnuma1 libtbb12 ocl-icd-libopencl1 \
+    && mkdir -p /tmp/intel-gpu-runtime \
+    && cd /tmp/intel-gpu-runtime \
+    && curl -fL --retry 5 --retry-delay 5 --retry-all-errors -O \
+        "https://github.com/intel/compute-runtime/releases/download/26.18.38308.1/libze-intel-gpu1_26.18.38308.1-0_amd64.deb" \
+    && curl -fL --retry 5 --retry-delay 5 --retry-all-errors -O \
+        "https://github.com/intel/compute-runtime/releases/download/26.18.38308.1/intel-opencl-icd_26.18.38308.1-0_amd64.deb" \
+    && curl -fL --retry 5 --retry-delay 5 --retry-all-errors -O \
+        "https://github.com/intel/compute-runtime/releases/download/26.18.38308.1/libigdgmm12_22.10.0_amd64.deb" \
+    && curl -fL --retry 5 --retry-delay 5 --retry-all-errors -O \
+        "https://github.com/intel/intel-graphics-compiler/releases/download/v2.34.4/intel-igc-core-2_2.34.4+21428_amd64.deb" \
+    && curl -fL --retry 5 --retry-delay 5 --retry-all-errors -O \
+        "https://github.com/intel/intel-graphics-compiler/releases/download/v2.34.4/intel-igc-opencl-2_2.34.4+21428_amd64.deb" \
+    && curl -fL --retry 5 --retry-delay 5 --retry-all-errors -O \
+        "https://ppa.launchpadcontent.net/kobuk-team/intel-graphics/ubuntu/pool/main/l/level-zero-loader/libze1_1.32.0-1~24.04~ppa1_amd64.deb" \
+    && printf '%s\n' \
+        '12b8254e6d3415c32cee9cd13943030b991d91212445c79fe1cc27176a72eca4  libze-intel-gpu1_26.18.38308.1-0_amd64.deb' \
+        'b2d0c924e56b3f9e5837774d68b0c67461b8633035d93ca18b1a8e3e5ead15fa  intel-opencl-icd_26.18.38308.1-0_amd64.deb' \
+        '6031a63d6e8a12ce61c14efc15f2c8e727061286e3820b8594e6d00615e04d54  libigdgmm12_22.10.0_amd64.deb' \
+        '0ce1e715ec5bf30b1304b42acfbda34cc514a0f616dd48c6a31973c4075d8d09  intel-igc-core-2_2.34.4+21428_amd64.deb' \
+        '09a71e8b6ad432ed0511b09fa4f580c1b44534a60ccb0545212507bf67dc0d1b  intel-igc-opencl-2_2.34.4+21428_amd64.deb' \
+        'd4001dc474d3cb74ded50a449b9f646cfdfbb31e69e70b8af38f2d18273dfce1  libze1_1.32.0-1~24.04~ppa1_amd64.deb' \
+        | sha256sum --check - \
+    && dpkg -i ./*.deb \
+    && ldconfig \
+    && test -e /usr/lib/x86_64-linux-gnu/libOpenCL.so.1 \
+    && test -e /usr/lib/x86_64-linux-gnu/libze_loader.so.1 \
+    && cd / \
+    && rm -rf /tmp/intel-gpu-runtime \
+    && apt-get purge -y curl \
+    && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./requirements.txt

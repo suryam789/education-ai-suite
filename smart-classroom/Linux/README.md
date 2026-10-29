@@ -30,11 +30,12 @@ The main features are as follows:
 - RAG-based Question & Answer over uploaded educational materials
 - Vector-based retrieval using ChromaDB with CLIP and mE5 embeddings
 
-Topic segmentation automatically enables Content Search. Its services are
-packaged inside the Linux app container and reached through the app on port 8000.
-Search data persists under `storage/content-search/`; model downloads and
-OpenVINO exports persist in the model-cache volume. Setup waits for search
-readiness at `/api/v1/system/health` before reporting completion.
+Topic segmentation automatically enables Content Search.
+
+- The reranker requires an Intel GPU.
+- Run `./setup.sh` to configure GPU access and start the app.
+
+For manual startup, see the [Advanced Setup Guide](../docs/user-guide/advanced-setup-guide.md#linux-manual-docker-startup).
 
 ## Architecture
 

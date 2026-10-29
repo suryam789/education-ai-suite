@@ -110,27 +110,18 @@ else
   log "⚠️  python3 not found — skipping COMPOSE_PROFILES derivation; set it manually in .env before 'docker compose up'."
 fi
 
-# --- GPU detection (optional docker-compose.gpu.yml overlay) ----------------
+# --- Require Intel GPU support for Content Search reranking ----------------
 COMPOSE_FILES=(-f docker/docker-compose.yml)
-if [[ -d /dev/dri ]]; then
-  log "Intel GPU render node (/dev/dri) detected — enabling docker/docker-compose.gpu.yml overlay."
-  COMPOSE_FILES+=(-f docker/docker-compose.gpu.yml)
-  if ! grep -qE '^RENDER_GID=.+' "$ENV_FILE" 2>/dev/null; then
-    RENDER_GID="$(getent group render | cut -d: -f3 || true)"
-    if [[ -n "$RENDER_GID" ]]; then
-      if grep -qE '^RENDER_GID=' "$ENV_FILE" 2>/dev/null; then
-        sed -i "s/^RENDER_GID=.*/RENDER_GID=${RENDER_GID}/" "$ENV_FILE"
-      else
-        printf 'RENDER_GID=%s\n' "$RENDER_GID" >> "$ENV_FILE"
-      fi
-      log "Set RENDER_GID=${RENDER_GID} in .env."
-    else
-      log "⚠️  No 'render' group found — set RENDER_GID in .env manually before 'docker compose up'."
-    fi
-  fi
+[[ -d /dev/dri ]] || die "Intel GPU device directory /dev/dri is required for Content Search reranking."
+RENDER_GID="$(getent group render | cut -d: -f3 || true)"
+[[ "$RENDER_GID" =~ ^[0-9]+$ ]] || die "Host 'render' group not found; GPU access requires it."
+if grep -qE '^RENDER_GID=' "$ENV_FILE" 2>/dev/null; then
+  sed -i "s/^RENDER_GID=.*/RENDER_GID=${RENDER_GID}/" "$ENV_FILE"
 else
-  log "No /dev/dri found — running CPU-only (docker/docker-compose.gpu.yml not applied)."
+  printf 'RENDER_GID=%s\n' "$RENDER_GID" >> "$ENV_FILE"
 fi
+log "GPU required: /dev/dri detected; set RENDER_GID=${RENDER_GID} in .env."
+COMPOSE_FILES+=(-f docker/docker-compose.gpu.yml)
 
 # --- Sanity-check the compose config before building anything --------------
 log "Validating docker compose config (docker compose config --services)…"
