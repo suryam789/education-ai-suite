@@ -46,9 +46,8 @@ import logging
 from pathlib import Path
 from typing import Dict, FrozenSet, List
 
-from utils.config_loader import config
-
 logger = logging.getLogger(__name__)
+config = None
 
 SC_ROOT = Path(__file__).resolve().parents[1]
 ENV_PATH = SC_ROOT / ".env"
@@ -75,8 +74,8 @@ _FEATURE_PROFILES: Dict[str, FrozenSet[str]] = {
 _ALL_PROFILES: List[str] = ["asr", "text-gen", "va"]
 
 
-def _enabled_features() -> List[str]:
-    features = getattr(config, "features", None)
+def _enabled_features(settings) -> List[str]:
+    features = getattr(settings, "features", None)
     if features is None:
         return []
     enabled = []
@@ -87,11 +86,16 @@ def _enabled_features() -> List[str]:
     return enabled
 
 
-def resolve_profiles() -> List[str]:
+def resolve_profiles(settings=None) -> List[str]:
     """Return the sorted, deterministic list of Compose profiles to activate
     for the currently enabled `config.yaml` features."""
+    if settings is None:
+        settings = config
+    if settings is None:
+        from utils.config_loader import load_config
+        settings = load_config()
     active: set = set()
-    for feature in _enabled_features():
+    for feature in _enabled_features(settings):
         active |= _FEATURE_PROFILES.get(feature, frozenset())
     return [p for p in _ALL_PROFILES if p in active]
 

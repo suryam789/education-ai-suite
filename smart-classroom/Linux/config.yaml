@@ -5,6 +5,16 @@
 
 REGISTRY: true
 
+deployment:
+  images:
+    audio_analyzer: intel/audio-analyzer:2026.3.0-rc1
+    model_downloader: intel/model-download:latest
+    metrics_collector: intel/retail-benchmark:2026.3.0-rc1
+
+model_download:
+  plugins: [huggingface, openvino, modelscope]
+  ovms_release_tag: v2026.4.1
+
 features:
   asr:                { enabled: true }
   summary:            { enabled: true }
@@ -23,26 +33,51 @@ monitoring:
 
 models:
   asr:
-    provider: openvino # openvino, funasr and openai supported
+    provider: openvino # openvino, funasr, openai or whispercpp
     name: whisper-base  # can be (whisper-base, whisper-small etc) or paraformer-zh
     device: CPU # CPU Recommended
+    weight_format: null
     temperature: 0.0
     diarization: False # requires manual HF token setup, see docs/user-guide/advanced-setup-guide.md#f-speaker-diarization-setup-optional
-    hf_token: None   # needed only if diarization=true
     models_base_path: "models"
     threads_limit: Null # applied only if > 0 (else defaults are used); value can be tuned based on CPU specifications
     no_speech_threshold: 0.6
     logprob_threshold: -1.0
     min_duration_sec: 0.25
     min_words: 2
+    vad_model: iic/speech_fsmn_vad_zh-cn-16k-common-pytorch
+    punc_model: iic/punc_ct-transformer_zh-cn-common-vocab272727-pytorch
+    hallucination_silence_threshold: 1.0
+    hallucination_phrase_filter: true
+    hallucination_phrases:
+      - thank you
+      - thank you very much
+      - thanks for watching
+      - thank you for watching
+      - please subscribe
+      - subscribe
+      - you
+      - bye
+    repetition_penalty: 1.8
+    beam_size: 1
+    best_of: 1
+    word_timestamps: false
     max_chars_per_segment: 0  # cap characters per merged transcript segment; set to 0 or Null to disable merging entirely
     concurrency: 1    # CapabilityRunner max_concurrency (single warm pipe)
     queue_max: 8      # CapabilityRunner queue depth before 503 backpressure
 
   diarization: #Only applicable when diarization is set to True for ASR
-    backend: pyannote  # pyannote, or campplus for funasr/paraformer-zh
+    backend: pyannote
     provider: "huggingface"
     name: "pyannote/speaker-diarization-community-1"
+    device: CPU
+    min_speakers: 1
+    max_speakers: 2
+    identity:
+      enabled: true
+      similarity_threshold: 0.75
+      lock_min_duration_sec: 0.75
+      session_ttl_seconds: 1800
     models_base_path: "models"
     global_speaker_similarity_threshold: 0.65
 
@@ -115,14 +150,21 @@ models:
       topics_max: 25
 
 audio_analyzer:
-  # Transcription (ASR + diarization) is served by the containerized
-  # audio-analyzer microservice. In docker-compose the app reaches it via
-  # AUDIO_ANALYZER_URL=http://audio-analyzer:8010 (this host/port is the
-  # bare-metal / dev fallback). The service reads its own config.yaml
-  # (models, devices, diarization) from the submodule bind-mount.
   host_addr: "127.0.0.1"
   port: 8010
   request_timeout_sec: 600
+  model_download_timeout_sec: 1800
+  use_ov_genai: true
+  cleanup_on_exit: true
+  clear_storage_on_startup: false
+  sentiment:
+    enabled: false
+    model: speechbrain/emotion-recognition-wav2vec2-IEMOCAP
+    device: CPU
+    provider: openvino
+    weight_format: int8
+    recency_weight: 0.7
+    peak_label: angry
 
 mindmap:
   min_token: 20
@@ -134,6 +176,10 @@ audio_preprocessing:
   silence_duration: 0.3   # minimum silence length in seconds
   search_window_sec: 1    # how far to look for silence if no silence exactly at chunk boundary
   chunk_output_path: chunks/
+  denoise: false
+  denoise_model: ""
+  normalize: false
+  normalize_filter: dynaudnorm
 
 audio_util:
   max_size_mb: 800

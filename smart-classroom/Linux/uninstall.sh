@@ -58,6 +58,15 @@ done
 
 STATUS=0
 
+GENERATED_ENV="${SCRIPT_DIR}/.generated/compose.env"
+if [[ ! -f "$GENERATED_ENV" ]]; then
+  (cd "$SCRIPT_DIR" && python3 -m utils.service_config) \
+    || die "Could not generate deployment settings for uninstall."
+fi
+while IFS='=' read -r key value; do
+  unset "$key"
+done < "$GENERATED_ENV"
+
 run_root() {
   if [[ $EUID -eq 0 ]]; then
     "$@"
@@ -108,6 +117,7 @@ remove_stack() {
   local base=(-f "${SCRIPT_DIR}/docker/docker-compose.yml" -f "${SCRIPT_DIR}/docker/docker-compose.gpu.yml")
   local common=(-p "$PROJECT" --profile '*')
   [[ -f "$ENV_FILE" ]] && common+=(--env-file "$ENV_FILE")
+  common+=(--env-file "$GENERATED_ENV")
 
   log "Removing containers, network, volumes and images (docker compose down -v --rmi all)…"
   docker compose "${common[@]}" "${base[@]}" down -v --rmi all --remove-orphans \

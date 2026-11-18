@@ -71,4 +71,12 @@ def test_asr_shares_single_model_downloader_container():
     assert "model-cache:/app/audio_analyzer/models" in analyzer["volumes"]
     assert "model-cache:/opt/models" in downloader["volumes"]
     assert "audio-analyzer-models" not in compose["volumes"]
-    assert not any(v.startswith("audio-analyzer-models:") for v in analyzer["volumes"])
+    assert not any(
+        volume.startswith("audio-analyzer-models:")
+        for volume in analyzer["volumes"] if isinstance(volume, str)
+    )
+    config_mount = next(volume for volume in analyzer["volumes"] if isinstance(volume, dict))
+    assert config_mount["target"] == "/app/audio_analyzer/config.yaml"
+    assert config_mount["bind"]["create_host_path"] is False
+    assert "SC_GENERATED_DIR" in config_mount["source"]
+    assert "edge-ai-libraries" not in yaml.safe_dump(compose)

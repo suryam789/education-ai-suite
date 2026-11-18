@@ -50,7 +50,16 @@ pid_listen_port() {
 }
 
 
-if git -C "$SCRIPT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+command -v python3 >/dev/null 2>&1 || die "Python 3 with PyYAML is required."
+export SC_CONFIG_PATH="${SC_CONFIG_PATH:-$SCRIPT_DIR/config.yaml}"
+log "Validating config and generating service settings..."
+(cd "$SCRIPT_DIR" && python3 -m utils.service_config) || die "Invalid Smart Classroom configuration."
+REGISTRY="$(cd "$SCRIPT_DIR" && python3 -m utils.registry_mode)"
+COMPOSE=(bash "$SCRIPT_DIR/scripts/compose.sh")
+
+if [[ "$REGISTRY" == "true" ]]; then
+  log "Registry mode: skipping edge-ai-libraries and performance-tools clones."
+elif git -C "$SCRIPT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   log "Initializing git submodules (edge-ai-libraries, performance-tools)…"
   git -C "$SCRIPT_DIR" submodule sync -- edge-ai-libraries
   git -C "$SCRIPT_DIR" submodule update --init edge-ai-libraries
@@ -91,7 +100,7 @@ fi
 #
 
 
-CONFIG_YAML="${SCRIPT_DIR}/config.yaml"
+CONFIG_YAML="$SC_CONFIG_PATH"
 if [[ -f "$CONFIG_YAML" ]] && command -v python3 >/dev/null 2>&1; then
   DIARIZATION_ENABLED="$(python3 - "$CONFIG_YAML" <<'PY'
 import sys, yaml
@@ -119,25 +128,11 @@ else
   log "    gated text-gen models, set HF_TOKEN in .env manually."
 fi
 
-# --- Keep startup-models.yaml/.gpu.yaml in sync with config.yaml ------------
-if command -v python3 >/dev/null 2>&1; then
-  log "Syncing startup-models.yaml/.gpu.yaml model names from config.yaml…"
-  (cd "$SCRIPT_DIR" && python3 -m utils.sync_startup_models --write) \
-    || log "⚠️  Could not sync startup-models.yaml — check it manually against config.yaml."
-else
-  log "⚠️  python3 not found — skipping startup-models.yaml sync; check it manually against config.yaml."
-fi
-
-if command -v python3 >/dev/null 2>&1; then
-  log "Deriving COMPOSE_PROFILES from config.yaml features:…"
-  (cd "$SCRIPT_DIR" && python3 -m utils.compose_profiles --write-env) \
-    || log "⚠️  Could not derive COMPOSE_PROFILES automatically — set it manually in .env before 'docker compose up'."
-else
-  log "⚠️  python3 not found — skipping COMPOSE_PROFILES derivation; set it manually in .env before 'docker compose up'."
-fi
+log "Syncing startup-models.yaml/.gpu.yaml model names from config.yaml..."
+(cd "$SCRIPT_DIR" && python3 -m utils.sync_startup_models --write) \
+  || die "Could not sync startup-models.yaml from config.yaml."
 
 # --- Require Intel GPU support for Content Search reranking ----------------
-COMPOSE_FILES=(-f docker/docker-compose.yml)
 [[ -d /dev/dri ]] || die "Intel GPU device directory /dev/dri is required for Content Search reranking."
 RENDER_GID="$(getent group render | cut -d: -f3 || true)"
 [[ "$RENDER_GID" =~ ^[0-9]+$ ]] || die "Host 'render' group not found; GPU access requires it."
@@ -147,16 +142,6 @@ else
   printf 'RENDER_GID=%s\n' "$RENDER_GID" >> "$ENV_FILE"
 fi
 log "GPU required: /dev/dri detected; set RENDER_GID=${RENDER_GID} in .env."
-COMPOSE_FILES+=(-f docker/docker-compose.gpu.yml)
-
-# --- Image source: config.yaml REGISTRY (true = Docker Hub, false = local build) ---
-REGISTRY="true"
-if command -v python3 >/dev/null 2>&1; then
-  REGISTRY="$(cd "$SCRIPT_DIR" && python3 -m utils.registry_mode)" \
-    || die "Could not resolve REGISTRY from config.yaml (must be true or false) — see the error above."
-else
-  log "⚠️  python3 not found — defaulting to REGISTRY=true (pull Docker Hub images)."
-fi
 
 if [[ "$REGISTRY" == "true" ]]; then
   log "REGISTRY=true: pulling smart-classroom-app, ovms-provision, va-model-provision, video-analytics, audio-analyzer, model-downloader and metrics-collector images from Docker Hub."
@@ -166,23 +151,22 @@ else
     [[ -f "${SCRIPT_DIR}/${build_ctx}/docker/Dockerfile" ]] \
       || die "Missing ${build_ctx}/docker/Dockerfile — initialize the git submodules (git submodule update --init) or set REGISTRY: true in config.yaml."
   done
-  COMPOSE_FILES+=(-f docker/docker-compose.local-build.yml)
 fi
 
 # --- Sanity-check the compose config before building anything --------------
 log "Validating docker compose config (docker compose config --services)…"
-(cd "$SCRIPT_DIR" && docker compose --env-file "$ENV_FILE" "${COMPOSE_FILES[@]}" config --services >/dev/null) \
+("${COMPOSE[@]}" config --services >/dev/null) \
   || die "docker compose config failed — check COMPOSE_PROFILES/.env and the compose files above before retrying."
 
 # --- Build + start the stack -------------------------------------------------
 if [[ "$REGISTRY" == "true" ]]; then
   log "Pulling Docker Hub images (docker compose pull --ignore-buildable)…"
-  (cd "$SCRIPT_DIR" && docker compose --env-file "$ENV_FILE" "${COMPOSE_FILES[@]}" pull --ignore-buildable) \
+  ("${COMPOSE[@]}" pull --ignore-buildable) \
     || die "docker compose pull failed — check network/proxy access to Docker Hub, or set REGISTRY: false in config.yaml to build locally."
 fi
 
 log "Starting the stack (docker compose up -d --build)…"
-(cd "$SCRIPT_DIR" && docker compose --env-file "$ENV_FILE" "${COMPOSE_FILES[@]}" up -d --build) \
+("${COMPOSE[@]}" up -d --build) \
   || die "docker compose up failed — check the build/service logs above."
 
 # --- Wait for the app to become healthy -------------------------------------
@@ -201,16 +185,16 @@ while (( elapsed < HEALTH_TIMEOUT_S )); do
 done
 
 if [[ "$app_status" == "healthy" ]]; then
-  ACTIVE_PROFILES="$(grep -E '^COMPOSE_PROFILES=' "$ENV_FILE" 2>/dev/null | cut -d= -f2-)"
+  ACTIVE_PROFILES="$(cd "$SCRIPT_DIR" && python3 -m utils.compose_profiles)"
   log "✅ App is healthy: http://localhost:8000/"
   log "   Active profiles: ${ACTIVE_PROFILES:-none}"
 else
   log "⚠️  App did not become healthy within ${HEALTH_TIMEOUT_S}s (last status: ${app_status})."
   log "    First-run model downloads can take a long time — it may still finish; re-check with:"
-  log "      docker compose -f docker/docker-compose.yml ps"
+  log "      bash scripts/compose.sh ps"
   log "    Inspect logs with:"
-  log "      docker compose -f docker/docker-compose.yml logs -f app"
-  log "      docker compose -f docker/docker-compose.yml logs -f model-downloader audio-analyzer ovms"
+  log "      bash scripts/compose.sh logs -f app"
+  log "      bash scripts/compose.sh logs -f model-downloader audio-analyzer ovms"
   die "App startup failed; resolve the errors above before using the UI."
 fi
 

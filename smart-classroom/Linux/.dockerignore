@@ -20,6 +20,7 @@ ui/dist/
 ui/.vite/
 
 # Runtime / generated data
+.generated/
 models/
 storage/
 monitoring/logs/

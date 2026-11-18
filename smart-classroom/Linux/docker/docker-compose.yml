@@ -113,11 +113,12 @@ services:
 
   audio-analyzer:   
     profiles: ["asr"]
-    image: intel/audio-analyzer:${INTEL_IMAGE_TAG:-latest}
+    image: ${AUDIO_ANALYZER_IMAGE:?Run bash scripts/compose.sh to load config.yaml}
     pull_policy: always
     container_name: sc-audio-analyzer
     user: "1000:1000"
     environment:
+      SC_AUDIO_CONFIG_SHA256: "${SC_AUDIO_CONFIG_SHA256:?Run bash scripts/compose.sh to load audio settings}"
       HF_HOME: /app/audio_analyzer/.cache/huggingface
       # Whisper sources, FunASR (ModelScope) and diarization snapshots are
       # requested from the shared model-downloader REST service below and land
@@ -135,8 +136,12 @@ services:
       HTTPS_PROXY: "${HTTPS_PROXY:-}"
       NO_PROXY: "model-downloader,localhost,127.0.0.1,${NO_PROXY:-}"
     volumes:
-      # Editable service config (ASR provider/model/device, diarization).
-      - ../edge-ai-libraries/microservices/audio-analyzer/config.yaml:/app/audio_analyzer/config.yaml:ro
+      - type: bind
+        source: ${SC_GENERATED_DIR:?Run bash scripts/compose.sh}/audio-analyzer.yaml
+        target: /app/audio_analyzer/config.yaml
+        read_only: true
+        bind:
+          create_host_path: false
       # Same volume model-downloader writes to (/opt/models); snapshots are
       # read back here at <download_path>/<hub>/<owner_model>.
       - model-cache:/app/audio_analyzer/models
