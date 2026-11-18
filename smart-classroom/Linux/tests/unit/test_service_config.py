@@ -165,6 +165,40 @@ def test_compose_uses_selected_config_without_submodules(tmp_path, registry):
     assert generated["models"]["asr"]["name"] == "paraformer-zh"
 
 
+@pytest.mark.parametrize("tag_override", [None, "custom-release"])
+def test_fresh_registry_install_uses_upstream_image_tag(tmp_path, tag_override):
+    if not shutil.which("docker"):
+        pytest.skip("Docker Compose is not installed")
+    _isolated_checkout(tmp_path)
+    source = tmp_path / "config.yaml"
+    source.write_text(yaml.safe_dump({
+        "REGISTRY": True,
+        "features": {"summary": {"enabled": True}, "video_analytics": {"enabled": True}},
+    }))
+    shutil.copyfile(ROOT / ".env.example", tmp_path / ".env")
+    environment = {**os.environ, "SC_CONFIG_PATH": str(source), "RENDER_GID": "109"}
+    for key in ("INTEL_IMAGE_TAG", "SMART_CLASSROOM_APP_IMAGE", "OVMS_PROVISION_IMAGE",
+                "VA_MODEL_PROVISION_IMAGE", "VIDEO_ANALYTICS_IMAGE"):
+        environment.pop(key, None)
+    if tag_override is not None:
+        environment["INTEL_IMAGE_TAG"] = tag_override
+    result = subprocess.run(
+        ["bash", str(tmp_path / "scripts/compose.sh"), "config", "--format", "json"],
+        env=environment, capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    services = json.loads(result.stdout)["services"]
+    tag = tag_override or "2026.3.0-rc1"
+    for service, repository in {
+        "app": "smart-classroom-app",
+        "ovms-provision": "smart-classroom-ovms-provision",
+        "va-model-provision": "smart-classroom-va-model-provision",
+        "video-analytics": "smart-classroom-video-analytics",
+    }.items():
+        assert services[service]["image"] == f"intel/{repository}:{tag}"
+        assert "build" not in services[service]
+
+
 @pytest.mark.parametrize("registry", [True, False])
 def test_setup_initializes_submodules_only_for_local_build(tmp_path, registry):
     _isolated_checkout(tmp_path)
