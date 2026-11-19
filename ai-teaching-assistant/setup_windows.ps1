@@ -629,7 +629,14 @@ foreach ($Service in $Services) {
 
 Write-Step "Installing Python dependencies..."
 
+$DependencyPins = Import-PowerShellDataFile -Path (Join-Path $ScriptDir "configs\windows-dependency-pins.psd1")
+
 foreach ($Service in $Services) {
+    $PinnedRequirements = @(
+        $DependencyPins.Pins |
+            Where-Object { $_.Services -contains "*" -or $_.Services -contains $Service.Name } |
+            ForEach-Object { $_.Requirement }
+    )
     $VenvPath = Join-Path $Service.Path "venv"
     $PythonExe = Join-Path $VenvPath "Scripts\python.exe"
     $RequirementsFile = Join-Path $Service.Path "requirements.txt"
@@ -666,8 +673,8 @@ foreach ($Service in $Services) {
         Invoke-NativeInstallCommand -Command "pip install --upgrade pip setuptools wheel" -Quiet -ScriptBlock {
             & $PythonExe -m pip install --upgrade pip setuptools wheel
         }
-        Invoke-NativeInstallCommand -Command "pip install -r $RequirementsFile" -ScriptBlock {
-            & $PythonExe -m pip install -r $RequirementsFile
+        Invoke-NativeInstallCommand -Command "pip install -r $RequirementsFile $($PinnedRequirements -join ' ')" -ScriptBlock {
+            & $PythonExe -m pip install -r $RequirementsFile @PinnedRequirements
         }
         
         if ($LASTEXITCODE -eq 0) {
@@ -891,7 +898,10 @@ $ModelServices = @(
 # Python snippet that reproduces exactly what each service does at startup:
 # ensure the model is downloaded/exported, then load it into memory once.
 $WarmupPy = @"
+import logging
 import sys
+import traceback
+logging.basicConfig(level=logging.INFO, stream=sys.stdout)
 try:
     from utils.ensure_model import ensure_model
     from utils.preload_models import preload_models
@@ -899,9 +909,12 @@ try:
     preload_models()
     print('WARMUP_OK')
 except Exception as exc:
+    traceback.print_exc(file=sys.stdout)
     print('WARMUP_FAILED: ' + repr(exc))
     sys.exit(1)
 "@
+
+$FailedModelServices = @()
 
 foreach ($Service in $ModelServices) {
     $VenvPath = Join-Path $Service.Path "venv"
@@ -909,6 +922,7 @@ foreach ($Service in $ModelServices) {
 
     if (-not (Test-Path $PythonExe)) {
         Write-Error-Custom "Skipping model warmup for $($Service.Name): missing $PythonExe"
+        $FailedModelServices += $Service.Name
         continue
     }
 
@@ -937,13 +951,15 @@ foreach ($Service in $ModelServices) {
         }
 
         if (-not $Succeeded) {
+            $FailedModelServices += $Service.Name
             Write-Error-Custom "Model warmup failed for $($Service.Name) after $MaxAttempts attempts"
-            Write-Info "The service will retry the export on first startup, which may be slow."
+            Write-Info "Resolve the error above and rerun setup before starting services."
         }
     }
     catch {
+        $FailedModelServices += $Service.Name
         Write-Error-Custom "Model warmup errored for $($Service.Name): $_"
-        Write-Info "The service will retry the export on first startup, which may be slow."
+        Write-Info "Resolve the error above and rerun setup before starting services."
     }
     finally {
         Pop-Location
@@ -974,8 +990,8 @@ foreach ($Service in $Services) {
     
     try {
         $Output = & $PythonExe -m pip show pydantic 2>&1
-        if ($Output) {
-            Write-Success "$($Service.Name) dependencies verified"
+        if ($LASTEXITCODE -eq 0 -and $Output) {
+            Write-Success "$($Service.Name): pydantic package metadata found"
         }
         else {
             throw "Package check failed"
@@ -989,6 +1005,13 @@ foreach ($Service in $Services) {
 # =============================================================================
 # COMPLETION
 # =============================================================================
+
+if ($FailedModelServices.Count -gt 0) {
+    Write-Header "SETUP INCOMPLETE"
+    Write-Error-Custom "Model warmup failed for: $($FailedModelServices -join ', ')"
+    Write-Info "See docs/user-guide/troubleshooting.md, resolve the reported errors, and rerun setup_windows.ps1."
+    exit 1
+}
 
 Write-Header "SETUP COMPLETE"
 Write-Success "All components installed successfully!"
