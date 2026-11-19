@@ -61,6 +61,108 @@ limit, even when the repository is cloned under a relatively short path such as
 	may be required because the long-path setting is cached per process;
 	already-running processes may not pick up the change.
 
+## Smart App Control Blocks regex
+
+**Symptom**:
+
+Windows Smart App Control blocks the native extension in Python package
+`regex==2026.11.19`, preventing a service from starting or importing its
+dependencies. Version `2026.11.18` is the reported working version on affected
+systems.
+
+**Fix**:
+
+[setup_windows.ps1](../../setup_windows.ps1) reads `regex==2026.11.18` from
+[windows-dependency-pins.psd1](../../configs/windows-dependency-pins.psd1) and adds
+it to the dependency-install command for all four service virtual environments:
+`text-to-speech`, `audio-analyzer`, `rag-service`, and `kiosk-core`. The pin is
+resolved together with each service's requirements, so fresh installs and setup
+reruns use the same version, including downgrading an existing `2026.11.19` install.
+
+1. Update your checkout to include the pinned setup script.
+2. From the AI Teaching Assistant repository directory, stop the app, rerun setup,
+	and restart it:
+
+	```powershell
+	.\stop_ata.ps1
+	.\setup_windows.ps1
+	.\start_ata.ps1
+	```
+
+3. Verify the installed version and native-extension import in an affected service's
+	virtual environment. For example, for `rag-service`:
+
+	```powershell
+	& .\voice-enabled-interactions\smart-kiosk-assistant\rag-service\venv\Scripts\python.exe -c "import regex; from importlib.metadata import version; print(version('regex')); assert regex.fullmatch('ok', 'ok')"
+	```
+
+	The command should print `2026.11.18` and exit without an import error.
+
+Keep Smart App Control enabled. When installing service requirements manually,
+include `"regex==2026.11.18"` in the same pip install command. Only change the setup
+pin after validating a replacement version with Smart App Control enabled.
+
+## Smart App Control Blocks cygrpc / Model Warmup Fails
+
+**Symptom**:
+
+RAG model warmup fails with:
+
+```text
+ImportError: DLL load failed while importing cygrpc: An Application Control policy has blocked this file.
+```
+
+`cygrpc` is the native extension supplied by `grpcio`, not `regex`. On the affected
+Windows x64 / Python 3.12 installation, `grpcio==1.85.3` was blocked in both the RAG
+and audio-analyzer environments. `grpcio==1.85.1` passed the native import check
+without changing Application Control settings.
+
+**Fix**:
+
+[setup_windows.ps1](../../setup_windows.ps1) reads the compatibility pins from
+[windows-dependency-pins.psd1](../../configs/windows-dependency-pins.psd1), including
+`grpcio==1.85.1` alongside `regex==2026.11.18` for all four service environments.
+This data file records each pin's exact requirement and service scope;
+maintain compatibility pins there rather than in the setup script.
+Update your checkout, stop
+the app, and rerun setup as described above. For manual dependency installs,
+include both `"regex==2026.11.18"` and `"grpcio==1.85.1"` in the same pip command.
+
+Further warmup checks exposed two additional native-extension blocks. Setup also
+applies these service-specific pins, tested on the same Windows x64 / Python 3.12
+installation:
+
+| Service | Blocked Package | Tested Pin | Blocked Extension |
+| --- | --- | --- | --- |
+| RAG | `xxhash==4.1.0` | `xxhash==4.0.2` | `_xxhash` |
+| Audio analyzer | `ml-dtypes==0.7.0` | `ml-dtypes==0.6.0` | `_ml_dtypes_ext` |
+
+Include the matching service-specific pin for manual installs too. Do not apply
+the audio `ml-dtypes` pin to RAG: this release requires NumPy 2, while RAG uses
+NumPy 1.26.
+
+Verify the native import in the affected environment, for example:
+
+```powershell
+& .\voice-enabled-interactions\smart-kiosk-assistant\rag-service\venv\Scripts\python.exe -c "from grpc._cython import cygrpc; import grpc; print(grpc.__version__)"
+```
+
+This should print `1.85.1` without an import error. Application Control decisions
+can differ by machine and policy; keep the policy enabled and consult your
+administrator if this version is also blocked.
+
+An audio-analyzer error about a missing `openvino_encoder_model.xml` after
+`Export failed: 1` is a downstream symptom of a failed export, not proof of the
+same `grpcio` problem. Setup now displays the exporter's INFO output and full
+warmup traceback. In the tested installation, the exporter was blocked while
+importing `_ml_dtypes_ext`; the audio-specific pin above fixed that import.
+Diagnose the first exporter error before the missing-file
+message; do not create an empty XML file or delete working models to suppress it.
+
+If any model warmup fails, setup reports `SETUP INCOMPLETE` and exits with code 1.
+A package metadata check alone does not verify native DLL imports or model
+readiness. Resolve the reported error and rerun setup before starting services.
+
 ## Port Conflicts
 
 **Symptom**:
